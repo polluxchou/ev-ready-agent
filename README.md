@@ -32,4 +32,4 @@ npm run build
 
 The repository includes a GitHub Actions workflow that builds and deploys `dist/` to GitHub Pages on every push to `main`.
 
-Set the repository secret `VITE_GOOGLE_MAPS_API_KEY` if the hosted preview should render Google Maps.
+The hosted preview intentionally does not inject `VITE_GOOGLE_MAPS_API_KEY`. Vite exposes `VITE_` variables to browser JavaScript, so keep the Maps key local unless it is a browser-restricted public key that you are comfortable exposing.
