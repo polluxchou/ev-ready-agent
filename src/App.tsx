@@ -76,23 +76,23 @@ const Hero = () => (
   <header className="hero">
     <div className="shell hero-grid">
       <div className="hero-text">
-        <span className="eyebrow">SC01 · buyer welcome</span>
+        <span className="eyebrow">SC01 · checkout</span>
         <h1 style={{ marginTop: 24 }}>
-          Congratulations.<br />
-          You just bought a <strong>serious performance EV.</strong>
+          One click locks the order.<br />
+          The same click <strong>starts your worry-free ownership.</strong>
         </h1>
 
         <div className="order-card">
           <div className="order-card-head">
-            <span className="status-pill">
+            <span className="status-pill status-pill-pending">
               <span className="status-dot" />
-              ORDER LOCKED · IN PRODUCTION
+              ORDER REVIEW · READY TO LOCK
             </span>
             <span className="order-card-line">L. Vogel · Milano</span>
           </div>
           <div className="order-card-body">
             <div>
-              <div className="label">Order</div>
+              <div className="label">Order draft</div>
               <div className="order-card-v mono">SC01-EU-0247</div>
             </div>
             <div>
@@ -114,7 +114,7 @@ const Hero = () => (
               </span>
               <div>
                 <div className="order-card-foot-title">
-                  Unlocked by <strong>TopSC Concierge</strong>
+                  Bundled: <strong>TopSC Worry-Free Ownership</strong>
                 </div>
                 <div className="order-card-foot-sub">
                   Parking permit · home charger install · paperwork · EU service network
@@ -123,27 +123,25 @@ const Hero = () => (
             </div>
             <div className="order-card-foot-right">
               <span className="order-card-foot-amount mono">€1,000</span>
-              <span className="order-card-foot-paid">PAID</span>
+              <span className="order-card-foot-paid">INCLUDED</span>
             </div>
           </div>
         </div>
 
         <p style={{ fontSize: 17, marginTop: 24, color: 'var(--text-1)', lineHeight: 1.55, maxWidth: 540 }}>
-          There's still a bit of setup between you and the keys — parking, home charging, paperwork, service network. None of it is yours to figure
-          out. We've put together a serious concierge service that handles the whole thing for you.
+          The moment you tap agree, the concierge takes over — parking permit, home charger install, paperwork, EU service network.
+          Hands off, end to end, until the keys are in your hand.
         </p>
 
         <div className="offer-strip">
-          <div className="offer-strip-price">
-            <span className="offer-currency">€</span>
-            <span className="offer-amount-sm">1,000</span>
-          </div>
-          <div className="offer-strip-divider" />
+          <span className="offer-strip-check" aria-hidden="true">
+            <Icon name="check" size={14} />
+          </span>
           <div className="offer-strip-text">
-            The whole onboarding — reservation to delivery. Simple, calm, actually enjoyable.
+            <strong style={{ color: 'var(--text-0)' }}>I agree to the order</strong> and authorize TopSC to begin worry-free ownership the moment it locks.
           </div>
           <a className="btn btn-blue offer-strip-cta" href="#demo">
-            Hire TopSC <span className="arrow">→</span>
+            Agree &amp; place order <span className="arrow">→</span>
           </a>
         </div>
       </div>
@@ -304,12 +302,7 @@ const Demo = () => (
       <div className="h2-row">
         <div>
           <span className="eyebrow">Try it · type your address</span>
-          <h2 style={{ marginTop: 14 }}>Start from where you live.<br/>The whole service unfolds from there.</h2>
-          <p>
-            Pick an address — a villetta in Volpiano (TO), a single-family in Massapequa NY, or a heritage palazzo in Torino centro. Every step
-            uses the actual local rules: art. 1122-bis comunicazione vs Town of Hempstead permit, e-distribuzione vs PSEG Long Island, Ecobonus
-            50% vs IRS §30C, NY FS-20 vs polizza RCA. Files and forms fill in on the right as you go.
-          </p>
+          <h2 style={{ marginTop: 14 }}>Buy with confidence.<br/>We handle everything after your address.</h2>
         </div>
         <div style={{ display: 'flex', gap: 8, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           <span className="badge green">LIVE · ADDRESS-DRIVEN</span>

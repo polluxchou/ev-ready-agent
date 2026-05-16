@@ -151,7 +151,7 @@ const CITIES: Record<CityId, CityData> = {
     subpanel: '200 A main · OK',
     feasibility: 'high',
     feasibilityLabel: 'HIGH FEASIBILITY',
-    approvalPath: 'Town of Hempstead electrical permit',
+    approvalPath: 'HOA notification + Town of Hempstead permit',
     permitForm: 'Town of Hempstead Online Permit Center — Electrical Permit Application',
     utility: 'PSEG Long Island',
     installerCert: 'Nassau County Master Electrician + Town of Hempstead Ch. 84',
@@ -161,11 +161,11 @@ const CITIES: Record<CityId, CityData> = {
     currency: '$',
     installCost: '$1,300 – $2,500',
     installTimeline: '3–5 weeks · 6–10 weeks if 100A→200A upgrade needed',
-    score: 88,
+    score: 84,
     feasibilityNarrative:
-      "Strong US baseline. Your home is a post-1990 single-family on a Hempstead-Town parcel with an existing 200 A service panel and attached 2-car garage — roughly 80% of South Shore homes are in this profile. No HOA, no condo, no co-op. NY State doesn't issue a state electrician license, so we're using a Nassau County Master Electrician who also holds the Town of Hempstead Chapter 84 license. Permit goes through the Hempstead Online Permit Center.",
+      "Strong US baseline. Your home is a post-1990 single-family on a Hempstead parcel with an existing 200 A service panel and attached 2-car garage. Technically the town permit is straightforward — but your deed records show the property sits inside a small residential covenant, the Massapequa Residential Association, which requires written notification before any visible exterior equipment is installed. So before we file with Hempstead, we need: HOA architectural notification, exterior placement sketch, utility-side load confirmation, and the town electrical permit.",
     catch:
-      "Two flags: (a) check FEMA flood-zone — much of southern Massapequa sits in AE/VE zones, and if the panel is in an un-elevated attached garage, Hempstead plan review will flag it; (b) Town has no in-house electrical inspector, so a third-party (NYBFU / Atlantic-Inland) does the final inspection and issues the Electrical Certificate that closes the permit. Order Confidence Score: 88 — proceed.",
+      "Not a full condo-style approval — the covenant just requires notification because chargers on front-facing walls can affect neighborhood appearance, conduit visible from the street can trigger design review, and some communities restrict new exterior hardware. Good news: this is paperwork, not a rejection risk. We mount the wallbox on the interior side wall of your attached garage — zero street visibility — and I send a notification letter to the Architectural Review Committee on your behalf. Once that's on file, HOA rejection probability is <5% and the Order Confidence Score moves 84 → 91.",
     serviceCity: 'Long Island',
     insuranceNote:
       "NY statutory minimums (25/50/10 + $50k PIP + UM/UIM) are dangerously low for an $80k EV. Standard carriers (GEICO, Progressive) typically reject Chinese-market VINs — we route to a specialty carrier (Hagerty / Grundy / Chubb Masterpiece) for an agreed-value policy in the $1.8–3.2k/yr range with a 7,500-mile cap. Need: NY DL, MV-999 title, MV-82 registration, garaging address proof, prior dec page. FS-20 ID card issued at bind.",
@@ -288,10 +288,11 @@ type Workspace = {
   warranty: WarrantyState;
   files: FileItem[];
   // a "keyframe" controls per-phase artifact reveal
-  reserveStep: 0 | 1 | 2; // 0 = no address, 1 = scanned, 2 = scored
+  reserveStep: 0 | 1 | 2 | 3; // 0 = no address, 1 = scanned, 2 = scored, 3 = HOA letter sent
   installStep: 0 | 1 | 2 | 3; // 0=idle, 1=letter drafting, 2=quotes, 3=booked
   serviceStep: 0 | 1 | 2; // 0=idle, 1=indexed, 2=confirmed
   warrantyStep: 0 | 1 | 2; // 0=idle, 1=building, 2=active
+  hoaLetterBonus: number; // confidence score bump once HOA letter is queued (US-only flow)
 };
 
 const initialWorkspace = (city: CityId = 'volpiano'): Workspace => ({
@@ -305,6 +306,7 @@ const initialWorkspace = (city: CityId = 'volpiano'): Workspace => ({
   installStep: 0,
   serviceStep: 0,
   warrantyStep: 0,
+  hoaLetterBonus: 0,
 });
 
 // Workspace state when the user jumps directly to a phase via the PhaseBar.
@@ -337,10 +339,11 @@ const fastForwardWorkspace = (target: Phase, city: CityId): Workspace => {
       ? { caseFile: 'active', coverage: '5y / 100k km', hvCoverage: '8y / 160k km', sla: '4.8 days' }
       : { caseFile: 'idle' },
     files: [],
-    reserveStep: past('reserve') ? 2 : 0,
+    reserveStep: past('reserve') ? 3 : 0,
     installStep: past('install') ? 3 : 0,
     serviceStep: past('service') ? 2 : 0,
     warrantyStep: past('warranty') ? 2 : 0,
+    hoaLetterBonus: past('reserve') && city === 'massapequa' ? 7 : 0,
   };
 };
 
@@ -348,11 +351,19 @@ const fastForwardWorkspace = (target: Phase, city: CityId): Workspace => {
 // SCRIPT — turn-by-turn dialogue
 // =============================================================================
 
-type Att = { icon?: IconName; label: string };
+type Att = { icon?: IconName; label: string; mailto?: string };
+
+type LetterDoc = {
+  from?: string;
+  to: string[];
+  subject: string;
+  body: string;
+};
 
 type Block =
   | { kind: 'text'; text: string; attachments?: Att[] }
   | { kind: 'tool'; label: string; args?: Record<string, string | number>; result?: string }
+  | { kind: 'letter'; doc: LetterDoc; status?: 'draft' | 'pdf' }
   | { kind: 'handoff'; to: AgentId };
 
 type Option = {
@@ -379,7 +390,42 @@ const setStatus = (w: Workspace, phase: Phase, status: 'pending' | 'active' | 'd
   phaseStatus: { ...w.phaseStatus, [phase]: status },
 });
 
-const addFile = (w: Workspace, f: FileItem): Workspace => ({ ...w, files: [...w.files, f] });
+const addFile = (w: Workspace, f: FileItem): Workspace =>
+  w.files.some((existing) => existing.label === f.label && existing.status === f.status)
+    ? w
+    : { ...w, files: [...w.files, f] };
+
+// ─── HOA notification letter (Massapequa US flow) ─────────────────────────
+const HOA_LETTER: LetterDoc = {
+  from: 'L. Vogel · 128 Tide Court, Massapequa, NY 11758',
+  to: ['Architectural Review Committee', 'Massapequa Residential Association'],
+  subject: 'Notification of Residential EV Charger Installation — 128 Tide Court',
+  body: [
+    'Dear Architectural Review Committee,',
+    '',
+    'I am the homeowner of 128 Tide Court, Massapequa, NY 11758, and I am writing to notify the association of a planned residential electric vehicle charger installation at my property.',
+    '',
+    'Installation details:',
+    '  • Vehicle: SC-01 electric vehicle',
+    '  • Charger type: Level 2 home wall charger (240 V / 48 A)',
+    '  • Installation location: Interior side wall of attached garage',
+    '  • Visibility from street: None',
+    '  • Licensed electrician: Nassau County Master Electrician (Town of Hempstead Ch. 84)',
+    '  • Town permit: To be submitted through the Town of Hempstead Online Permit Center',
+    '',
+    'The installation will not modify the exterior appearance of the property, obstruct shared spaces, or create any community safety concern. No conduit will be visible from the street or from neighboring lots.',
+    '',
+    'Please let me know if any additional documentation is required.',
+    '',
+    'Sincerely,',
+    'L. Vogel',
+    '128 Tide Court, Massapequa, NY 11758',
+  ].join('\n'),
+};
+
+const HOA_MAILTO = `mailto:arc@massapequa-residential.org?subject=${encodeURIComponent(
+  HOA_LETTER.subject,
+)}&body=${encodeURIComponent(HOA_LETTER.body)}`;
 
 const SCRIPT: Turn[] = [
   // ─── PHASE 1 · RESERVATION CHECK ──────────────────────────────────────────
@@ -417,7 +463,7 @@ const SCRIPT: Turn[] = [
         {
           kind: 'tool',
           label: 'address.scan',
-          args: { address: c.address, country: 'IT', radius_m: 500 },
+          args: { address: c.address, country: c.region, radius_m: 500 },
           result: `housing = ${c.housing} · public chargers = ${c.chargers} (${c.chargerNote}) · subpanel = ${c.subpanel} · feasibility = ${c.feasibility}`,
         },
         { kind: 'text', text: c.feasibilityNarrative },
@@ -443,9 +489,108 @@ const SCRIPT: Turn[] = [
         ] },
       ];
     },
+    options: (w) => {
+      if (w.city === 'massapequa') {
+        return [
+          { label: 'Draft & send the HOA notification', echo: 'Send the HOA notification on my behalf', keywords: ['hoa', 'letter', 'notification', 'draft', 'send', 'covenant'], next: 't2c' },
+          { label: 'Lock the reservation anyway', echo: 'Lock the reservation', keywords: ['lock', 'reserve', 'order'], next: 't3' },
+          { label: 'Try a different city', echo: 'Let me try a different address', keywords: ['different', 'change', 'switch'], next: 't1' },
+        ];
+      }
+      return [
+        { label: 'Good — lock the reservation', echo: 'Lock the reservation', keywords: ['lock', 'reserve', 'order'], next: 't3' },
+        { label: 'Try a different city', echo: 'Let me try a different address', keywords: ['different', 'change', 'switch'], next: 't1' },
+      ];
+    },
+  },
+
+  // ─── PHASE 1 · OPTIONAL · HOA notification (US-only) ─────────────────────
+  {
+    id: 't2c',
+    phase: 'reserve',
+    agentId: 'parking',
+    ts: '14:05',
+    blocks: () => [
+      {
+        kind: 'text',
+        text:
+          "Drafting under your name now. Mounting goes on the interior side wall of the garage so there's zero street visibility — this is a notification, not an approval ask. Here's the letter — review it before I save the PDF.",
+      },
+      {
+        kind: 'tool',
+        label: 'hoa.assist.generate_letter',
+        args: {
+          recipient: 'Architectural Review Committee',
+          community: 'Massapequa Residential Association',
+          property: '128 Tide Court, Massapequa, NY 11758',
+          install_location: 'Interior side wall · attached garage',
+          street_visibility: 'none',
+          electrician: 'Nassau County Master Electrician',
+          town_permit: 'Town of Hempstead Online Permit Center',
+        },
+        result: 'draft ready · awaiting your confirmation',
+      },
+      {
+        kind: 'letter',
+        status: 'draft',
+        doc: HOA_LETTER,
+      },
+      {
+        kind: 'text',
+        text:
+          "Once you confirm, I freeze it as a PDF and hand it off to your Mac Mail with the ARC pre-filled — you tap Send.",
+      },
+    ],
     options: () => [
-      { label: 'Good — lock the reservation', echo: 'Lock the reservation', keywords: ['lock', 'reserve', 'order'], next: 't3' },
-      { label: 'Try a different city', echo: 'Let me try a different address', keywords: ['different', 'change', 'switch'], next: 't1' },
+      { label: 'Confirm & save as PDF', echo: 'Confirm — save it as a PDF', keywords: ['confirm', 'pdf', 'save', 'ok'], next: 't2d' },
+      { label: 'Edit before sending', echo: 'Hold on — I want to tweak it', keywords: ['edit', 'change', 'tweak'], next: 't2b' },
+    ],
+  },
+
+  // ─── PHASE 1 · OPTIONAL · HOA letter → PDF → macOS Mail ───────────────────
+  {
+    id: 't2d',
+    phase: 'reserve',
+    agentId: 'parking',
+    ts: '14:06',
+    enter: (w) => ({ ...w, reserveStep: 3, hoaLetterBonus: 7 }),
+    blocks: () => [
+      {
+        kind: 'text',
+        text:
+          "Locked. Letter saved as hoa_notification_128_tide_ct.pdf and queued to the Architectural Review Committee on your behalf.",
+      },
+      {
+        kind: 'letter',
+        status: 'pdf',
+        doc: HOA_LETTER,
+      },
+      {
+        kind: 'tool',
+        label: 'hoa.email.compose',
+        args: {
+          to: 'arc@massapequa-residential.org',
+          subject: 'Notification of Residential EV Charger Installation — 128 Tide Court',
+          attachment: 'hoa_notification_128_tide_ct.pdf',
+          handoff: 'macOS Mail.app',
+        },
+        result: 'tap the PDF below to launch Mail with the message pre-filled',
+      },
+      {
+        kind: 'text',
+        text:
+          "Tap the attachment to open it in your Mac's Mail app — the email is pre-filled, you just hit Send. HOA rejection probability is below 5%. Order Confidence Score: 84 → 91.",
+        attachments: [
+          {
+            icon: 'doc',
+            label: 'hoa_notification_128_tide_ct.pdf',
+            mailto: HOA_MAILTO,
+          },
+        ],
+      },
+    ],
+    options: () => [
+      { label: 'Lock the reservation', echo: 'Lock the reservation', keywords: ['lock', 'reserve', 'order', 'proceed'], next: 't3' },
     ],
   },
 
@@ -454,14 +599,17 @@ const SCRIPT: Turn[] = [
     id: 't3',
     phase: 'reserve',
     agentId: 'parking',
-    ts: '14:05',
+    ts: '14:06',
     enter: (w) => {
       const c = CITIES[w.city];
       let next = setStatus(w, 'reserve', 'done');
       next = setStatus(next, 'install', 'active');
       next = addFile(next, { icon: 'doc', label: `reservation_${c.id}.pdf`, status: 'signed' });
       next = addFile(next, { icon: 'clock', label: 'delivery_plan.json', status: 'sent' });
-      return { ...next, reserveStep: 2 };
+      if (w.city === 'massapequa' && w.hoaLetterBonus > 0) {
+        next = addFile(next, { icon: 'doc', label: 'hoa_notification_128_tide_ct.pdf', status: 'sent' });
+      }
+      return { ...next, reserveStep: Math.max(next.reserveStep, 2) as Workspace['reserveStep'] };
     },
     blocks: () => [
       {
@@ -912,6 +1060,7 @@ type HistoryEntry = {
   turnId: string;
   // user reply that came AFTER this turn (if any)
   userText?: string;
+  selectedOption?: Option | null;
 };
 
 // =============================================================================
@@ -949,12 +1098,20 @@ const ChatBubble = ({
         <div className="bubble-text">{children}</div>
         {attachments && attachments.length > 0 && (
           <div className="bubble-attach">
-            {attachments.map((a, i) => (
-              <span key={i} className="attach-chip">
-                <Icon name={a.icon ?? 'doc'} size={12} />
-                {a.label}
-              </span>
-            ))}
+            {attachments.map((a, i) =>
+              a.mailto ? (
+                <a key={i} className="attach-chip attach-chip-action" href={a.mailto} title="Open in Mail.app">
+                  <Icon name={a.icon ?? 'doc'} size={12} />
+                  {a.label}
+                  <span className="attach-chip-cta">Open in Mail</span>
+                </a>
+              ) : (
+                <span key={i} className="attach-chip">
+                  <Icon name={a.icon ?? 'doc'} size={12} />
+                  {a.label}
+                </span>
+              ),
+            )}
           </div>
         )}
       </div>
@@ -996,6 +1153,46 @@ const ToolCallView = ({
     {result && <div className="tool-result">{result}</div>}
   </div>
 );
+
+const LetterPreview = ({
+  doc,
+  color,
+  status,
+}: {
+  doc: LetterDoc;
+  color: AgentColor;
+  status?: 'draft' | 'pdf';
+}) => {
+  const isPdf = status === 'pdf';
+  return (
+    <div className={`letter-preview ${color}${isPdf ? ' letter-preview-pdf' : ''}`}>
+      <div className="letter-preview-head">
+        <Icon name={isPdf ? 'doc' : 'sparkle'} size={12} />
+        <span className="mono">{isPdf ? 'document · pdf' : 'draft · letter'}</span>
+        <span className={`badge ${isPdf ? 'green' : 'muted'}`} style={{ marginLeft: 'auto' }}>
+          {isPdf ? 'SIGNED' : 'AWAITING REVIEW'}
+        </span>
+      </div>
+      <div className="letter-preview-meta">
+        {doc.from && (
+          <div>
+            <span className="k">From</span>
+            <span className="v">{doc.from}</span>
+          </div>
+        )}
+        <div>
+          <span className="k">To</span>
+          <span className="v">{doc.to.join(', ')}</span>
+        </div>
+        <div>
+          <span className="k">Subject</span>
+          <span className="v">{doc.subject}</span>
+        </div>
+      </div>
+      <div className="letter-preview-body">{doc.body}</div>
+    </div>
+  );
+};
 
 const HandoffPill = ({ to }: { to: AgentId }) => {
   const a = AGENTS[to];
@@ -1283,6 +1480,38 @@ const ReserveMap = ({
   );
 };
 
+const StreetViewThumb = ({ city }: { city: CityData }) => {
+  const apiKey = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined) ?? '';
+  const [failed, setFailed] = useState(false);
+  if (!apiKey || failed) return null;
+  // request 2x size (320×208) for retina sharpness — displayed at 160×104
+  const imgUrl =
+    `https://maps.googleapis.com/maps/api/streetview?size=320x208&location=${encodeURIComponent(city.address)}&fov=85&pitch=2&key=${apiKey}`;
+  // Search by full address (more accurate than hardcoded city lat/lng, which may snap to a nearby
+  // panorama instead of the actual building)
+  const openLink = `https://www.google.com/maps?q=${encodeURIComponent(city.address)}&layer=c`;
+  return (
+    <a
+      className="streetview-thumb"
+      href={openLink}
+      target="_blank"
+      rel="noopener noreferrer"
+      title="Open in Google Street View"
+    >
+      <img
+        src={imgUrl}
+        alt={`Street view of ${city.address}`}
+        loading="lazy"
+        onError={() => setFailed(true)}
+      />
+      <div className="streetview-thumb-label">
+        <Icon name="pin" size={10} />
+        <span>Your home</span>
+      </div>
+    </a>
+  );
+};
+
 const ReserveArtifact = ({ w }: { w: Workspace }) => {
   const c = CITIES[w.city];
   const feasOk = c.feasibility === 'high';
@@ -1321,6 +1550,7 @@ const ReserveArtifact = ({ w }: { w: Workspace }) => {
         ) : (
           <>
             <ReserveMap w={w} onCount={setChargerCount} />
+            <StreetViewThumb city={c} />
             {chargerCount && (
               <div className="gmap-legend">
                 <span className="gmap-legend-item">
@@ -1357,10 +1587,10 @@ const ReserveArtifact = ({ w }: { w: Workspace }) => {
       <div className="score-strip" style={{ opacity: stage >= 2 ? 1 : 0.3 }}>
         <div className="score-strip-left">
           <div className="label">Order Confidence Score</div>
-          <div className="score-num">{stage >= 2 ? c.score : '—'}<span>/100</span></div>
+          <div className="score-num">{stage >= 2 ? c.score + w.hoaLetterBonus : '—'}<span>/100</span></div>
         </div>
         <div className="score-bar">
-          <span className="bar"><span style={{ width: stage >= 2 ? `${c.score}%` : '0%' }} /></span>
+          <span className="bar"><span style={{ width: stage >= 2 ? `${c.score + w.hoaLetterBonus}%` : '0%' }} /></span>
           <div className="score-strip-foot mono">
             {stage >= 2 ? (feasOk ? 'Safe to lock — proceed to install' : 'Lock with contingency window') : 'Awaiting scan…'}
           </div>
@@ -1818,7 +2048,7 @@ export const DemoFlow = () => {
 
   const submitUser = (echo: string, option: Option | null) => {
     if (!currentTurn) return;
-    setHistory((h) => [...h, { turnId: currentTurn.id, userText: echo }]);
+    setHistory((h) => [...h, { turnId: currentTurn.id, userText: echo, selectedOption: option }]);
     if (option?.patch) setWorkspace((w) => option.patch!(w));
     setDraft('');
     if (option?.next) {
@@ -1881,15 +2111,17 @@ export const DemoFlow = () => {
           );
         } else if (b.kind === 'tool') {
           out.push(<ToolCallView key={`${entry.turnId}-t${i}`} label={b.label} args={b.args} result={b.result} color={a.color} />);
+        } else if (b.kind === 'letter') {
+          out.push(<LetterPreview key={`${entry.turnId}-l${i}`} doc={b.doc} status={b.status} color={a.color} />);
         } else if (b.kind === 'handoff') {
           out.push(<HandoffPill key={`${entry.turnId}-h${i}`} to={b.to} />);
         }
       });
-      // option clicked → apply patch to scratch
-      // find user reply: scan turn.options for matching echo
+      // Replay the exact matched/clicked option. Free-form replies often differ
+      // from option labels, so string matching here corrupts historical state.
       const userText = entry.userText;
       if (userText !== undefined) {
-        const opt = turn.options(scratch).find((o) => (o.echo ?? o.label) === userText);
+        const opt = entry.selectedOption;
         if (opt?.patch) scratch = opt.patch(scratch);
         out.push(
           <ChatBubble key={`${entry.turnId}-u`} from="user" name="LV" role="You" color="blue" ts={turn.ts}>
@@ -1941,6 +2173,9 @@ export const DemoFlow = () => {
                 }
                 if (b.kind === 'tool') {
                   return <ToolCallView key={`cur-t-${i}`} label={b.label} args={b.args} result={b.result} color={a.color} />;
+                }
+                if (b.kind === 'letter') {
+                  return <LetterPreview key={`cur-l-${i}`} doc={b.doc} status={b.status} color={a.color} />;
                 }
                 if (b.kind === 'handoff') {
                   return <HandoffPill key={`cur-h-${i}`} to={b.to} />;
